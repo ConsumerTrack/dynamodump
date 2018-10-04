@@ -1,6 +1,6 @@
-FROM python:2.7
+FROM python:3.6.5
 
-ADD ./.boto /root 
+ADD ./.boto /root
 ADD ./scripts /scripts
 
 ADD ./src/ /dynamodump

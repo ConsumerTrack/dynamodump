@@ -1,10 +1,8 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 """
     Simple backup and restore script for Amazon DynamoDB using boto to work similarly to mysqldump.
-
     Suitable for DynamoDB usages of smaller data volume which do not warrant the usage of AWS
     Data Pipeline for backup/restores/empty.
-
     dynamodump supports local DynamoDB instances as well (tested with dynalite).
 """
 
@@ -15,7 +13,6 @@ import logging
 import os
 import shutil
 import threading
-import Queue
 import datetime
 import errno
 import sys
@@ -23,7 +20,17 @@ import time
 import re
 import zipfile
 import tarfile
-import urllib2
+
+try:
+    from queue import Queue
+except ImportError:
+    from Queue import Queue
+
+try:
+    from urllib.request import urlopen
+    from urllib.error import URLError, HTTPError
+except ImportError:
+    from urllib2 import urlopen, URLError, HTTPError
 
 import boto.dynamodb2.layer1
 from boto.dynamodb2.exceptions import ProvisionedThroughputExceededException
@@ -63,13 +70,13 @@ def _get_aws_client(profile, region, service):
     # Fallback to querying metadata for region
     if not aws_region:
         try:
-            azone = urllib2.urlopen(METADATA_URL + "placement/availability-zone",
-                                    data=None, timeout=5).read().decode()
+            azone = urlopen(METADATA_URL + "placement/availability-zone",
+                            data=None, timeout=5).read().decode()
             aws_region = azone[:-1]
-        except urllib2.URLError:
+        except URLError:
             logging.exception("Timed out connecting to metadata service.\n\n")
             sys.exit(1)
-        except urllib2.HTTPError as e:
+        except HTTPError as e:
             logging.exception("Error determining region used for AWS client.  Typo in code?\n\n" +
                               str(e))
             sys.exit(1)
@@ -85,7 +92,6 @@ def _get_aws_client(profile, region, service):
 def get_table_name_by_tag(profile, region, tag):
     """
     Using provided connection to dynamodb and tag, get all tables that have provided tag
-
     Profile provided and, if needed, used to build connection to STS.
     """
 
@@ -122,7 +128,6 @@ def get_table_name_by_tag(profile, region, tag):
 def do_put_bucket_object(profile, region, bucket, bucket_object):
     """
     Put object into bucket.  Only called if we've also created an archive file with do_archive()
-
     Bucket must exist prior to running this function.
     profile could be None.
     bucket_object is file to be uploaded
@@ -143,12 +148,11 @@ def do_put_bucket_object(profile, region, bucket, bucket_object):
 def do_get_s3_archive(profile, region, bucket, table, archive):
     """
     Fetch latest file named filename from S3
-
     Bucket must exist prior to running this function.
     filename is args.dumpPath.  File would be "args.dumpPath" with suffix .tar.bz2 or .zip
     """
 
-    s3 = _get_aws_client(profile, 'us-east-1', "s3")
+    s3 = _get_aws_client(profile, region, "s3")
 
     if archive:
         if archive == "tar":
@@ -169,6 +173,7 @@ def do_get_s3_archive(profile, region, bucket, table, archive):
     try:
         contents = s3.list_objects_v2(
             Bucket=bucket,
+            Prefix=args.dumpPath
         )
     except botocore.exceptions.ClientError as e:
         logging.exception("Issue listing contents of bucket " + bucket + "\n\n" + str(e))
@@ -178,7 +183,7 @@ def do_get_s3_archive(profile, region, bucket, table, archive):
     # Therefore, just get item from bucket based on table name since that's what we name the files.
     filename = None
     for d in contents["Contents"]:
-        if d["Key"] == "{}.{}".format('dump', archive_type):
+        if d["Key"] == "{}/{}.{}".format(args.dumpPath, table, archive_type):
             filename = d["Key"]
 
     if not filename:
@@ -217,7 +222,6 @@ def do_get_s3_archive(profile, region, bucket, table, archive):
 def do_archive(archive_type, dump_path):
     """
     Create compressed archive of dump_path.
-
     Accepts archive_type of zip or tar and requires dump_path, directory added to archive
     """
 
@@ -913,7 +917,7 @@ def main():
         except AttributeError:
             # Didn't specify srcTable if we get here
 
-            q = Queue.Queue()
+            q = Queue()
             threads = []
 
             for i in range(MAX_NUMBER_BACKUP_WORKERS):
